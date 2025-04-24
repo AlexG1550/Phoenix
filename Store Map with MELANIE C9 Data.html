@@ -1,0 +1,1154 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Store Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            font-family: 'Roboto', sans-serif;
+            background: #f5f5f5;
+        }
+        #map {
+            height: 60vh;
+            width: 100%;
+            z-index: 1;
+        }
+        #location-list-container {
+            margin: 8px;
+            max-height: calc(40vh - 40px);
+            overflow-y: auto;
+            background: #fff;
+            border-radius: 6px;
+            transition: max-height 0.3s ease;
+            z-index: 2;
+        }
+        #location-list-container.expanded {
+            max-height: calc(90vh - 40px);
+        }
+        #location-list-container h3 {
+            margin: 0;
+            padding: 10px 12px;
+            background: #f7f7f7;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 1rem;
+            color: #333;
+            font-weight: 400;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        #search-filter {
+            width: calc(100% - 24px);
+            padding: 6px 10px;
+            margin: 8px 12px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            box-sizing: border-box;
+            font-family: 'Roboto', sans-serif;
+        }
+        #select-date, #clear-selections, #show-complete, #show-incomplete {
+            width: calc(25% - 6px);
+            padding: 6px 8px;
+            margin: 4px 3px;
+            min-height: 34px;
+            background: #e0e0e0;
+            border: none;
+            border-radius: 4px;
+            color: #333;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+            font-family: 'Roboto', sans-serif;
+            font-weight: 400;
+        }
+        #select-date:hover, #clear-selections:hover, #show-complete:hover, #show-incomplete:hover {
+            background: #d0d0d0;
+        }
+        #select-date:focus, #clear-selections:focus, #show-complete:focus, #show-incomplete:focus {
+            outline: 2px solid #007bff;
+            outline-offset: 2px;
+        }
+        #select-date.active, #show-complete.active, #show-incomplete.active {
+            background: #007bff;
+            color: #fff;
+        }
+        #calendar-overlay, #set-date-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.4);
+            z-index: 1002;
+        }
+        #set-date-overlay {
+            z-index: 1002;
+        }
+        #calendar, #set-date-calendar {
+            display: none;
+            position: fixed;
+            top: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 10px;
+            z-index: 1003;
+            width: 280px;
+            max-width: 90%;
+        }
+        #set-date-calendar {
+            z-index: 1003;
+        }
+        #calendar-header, #set-date-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 1rem;
+            font-weight: 400;
+            color: #333;
+        }
+        #calendar-header button, #set-date-header button {
+            background: #e0e0e0;
+            border: none;
+            padding: 4px 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            color: #333;
+        }
+        #calendar-header button:hover, #set-date-header button:hover {
+            background: #d0d0d0;
+        }
+        #calendar-header button:focus, #set-date-header button:focus {
+            outline: 2px solid #007bff;
+            outline-offset: 2px;
+        }
+        #calendar-grid, #set-date-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 2px;
+            text-align: center;
+            font-size: 0.85rem;
+        }
+        #calendar-grid div, #set-date-grid div {
+            padding: 6px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        #calendar-grid div:hover, #set-date-grid div:hover {
+            background: #f0f0f0;
+        }
+        #calendar-grid .header, #set-date-grid .header {
+            font-weight: 500;
+            cursor: default;
+            color: #555;
+        }
+        #calendar-grid .disabled, #set-date-grid .disabled {
+            color: #ccc;
+            cursor: default;
+        }
+        #calendar-grid .today, #set-date-grid .today {
+            background: #e8f0fe;
+            font-weight: 500;
+            color: #007bff;
+        }
+        #calendar .action-buttons, #set-date-calendar .action-buttons {
+            margin-top: 10px;
+            display: flex;
+            gap: 6px;
+        }
+        #calendar .action-buttons button, #set-date-calendar .action-buttons button {
+            flex: 1;
+            padding: 6px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            color: #fff;
+        }
+        #calendar .action-buttons button:focus, #set-date-calendar .action-buttons button:focus {
+            outline: 2px solid #007bff;
+            outline-offset: 2px;
+        }
+        #calendar .clear-selections, #set-date-calendar .clear-selections {
+            background: #d32f2f;
+        }
+        #calendar .clear-selections:hover, #set-date-calendar .clear-selections:hover {
+            background: #b71c1c;
+        }
+        #calendar .close-calendar, #set-date-calendar .close-calendar {
+            background: #388e3c;
+        }
+        #calendar .close-calendar:hover, #set-date-calendar .close-calendar:hover {
+            background: #2e7d32;
+        }
+        #location-list {
+            min-height: 40px;
+            padding: 8px;
+        }
+        #location-list.empty::before {
+            content: "No stores match the filter.";
+            display: block;
+            padding: 8px;
+            color: #666;
+            font-size: 0.85rem;
+            text-align: center;
+        }
+        #toggle-list-btn {
+            margin: 4px 8px;
+            padding: 6px 12px;
+            min-height: 34px;
+            background: #e0e0e0;
+            border: none;
+            border-radius: 4px;
+            color: #333;
+            font-size: 0.85rem;
+            cursor: pointer;
+            z-index: 3;
+            font-family: 'Roboto', sans-serif;
+            font-weight: 400;
+        }
+        #toggle-list-btn:hover {
+            background: #d0d0d0;
+        }
+        #toggle-list-btn:focus {
+            outline: 2px solid #007bff;
+            outline-offset: 2px;
+        }
+        .location-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 8px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 0.85rem;
+            color: #333;
+            cursor: pointer;
+        }
+        .location-item:hover {
+            background: #f9f9f9;
+        }
+        .location-item:focus {
+            outline: 2px solid #007bff;
+            outline-offset: 2px;
+        }
+        .location-number {
+            width: 20px;
+            text-align: right;
+            margin-right: 8px;
+            font-weight: 500;
+            color: #555;
+        }
+        .color-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .color-dot.red {
+            background: #FF0000;
+        }
+        .color-dot.green {
+            background: #00FF00;
+        }
+        .date {
+            margin-left: 8px;
+            font-size: 0.8rem;
+            color: #666;
+        }
+        #toast {
+            position: fixed;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 4px;
+            z-index: 1004;
+            display: none;
+            font-size: 0.85rem;
+        }
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1005;
+        }
+        #loading-overlay span {
+            color: #fff;
+            font-size: 1rem;
+            background: #333;
+            padding: 6px 12px;
+            border-radius: 4px;
+        }
+        .leaflet-popup-content-wrapper {
+            padding: 6px;
+            border-radius: 4px;
+        }
+        .leaflet-popup-content {
+            margin: 0;
+            font-size: 0.85rem;
+        }
+        .leaflet-popup-close-button {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            padding: 2px 6px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: #333;
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 3px;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .leaflet-popup-close-button:hover {
+            background: #f5f5f5;
+        }
+        .leaflet-popup-close-button:focus {
+            outline: 2px solid #007bff;
+            outline-offset: 2px;
+        }
+        .set-date-btn {
+            display: block;
+            width: 100%;
+            margin: 4px 0;
+            padding: 4px 8px;
+            background: #e0e0e0;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            text-align: center;
+            color: #333;
+        }
+        .set-date-btn:hover {
+            background: #d0d0d0;
+        }
+        .set-date-btn:focus {
+            outline: 2px solid #007bff;
+            outline-offset: 2px;
+        }
+        @media (max-width: 600px) {
+            #select-date, #clear-selections, #show-complete, #show-incomplete {
+                font-size: 0.8rem;
+                padding: 5px 6px;
+            }
+            #toggle-list-btn {
+                font-size: 0.8rem;
+                padding: 5px 10px;
+            }
+            #location-list-container h3 {
+                font-size: 0.9rem;
+                padding: 8px 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="loading-overlay"><span>Loading store data...</span></div>
+    <button id="toggle-list-btn" aria-label="Toggle store list">Expand List</button>
+    <div id="location-list-container">
+        <h3>Store List</h3>
+        <input type="text" id="search-filter" placeholder="Search stores..." aria-label="Search stores">
+        <button id="select-date" aria-label="Select date filter">Select Date</button>
+        <button id="clear-selections" aria-label="Clear selections">Clear Selections</button>
+        <button id="show-complete" aria-label="Show complete stores">Show Complete</button>
+        <button id="show-incomplete" aria-label="Show incomplete stores">Show Incomplete</button>
+        <div id="calendar-overlay"></div>
+        <div id="calendar">
+            <div id="calendar-header">
+                <button id="prev-month" aria-label="Previous month"><</button>
+                <span id="month-year"></span>
+                <button id="next-month" aria-label="Next month">></button>
+            </div>
+            <div id="calendar-grid"></div>
+            <div class="action-buttons">
+                <button class="clear-selections" aria-label="Clear selections">Clear Selections</button>
+                <button class="close-calendar" aria-label="Close calendar">Close</button>
+            </div>
+        </div>
+        <div id="set-date-overlay"></div>
+        <div id="set-date-calendar">
+            <div id="set-date-header">
+                <button id="set-date-prev-month" aria-label="Previous month"><</button>
+                <span id="set-date-month-year"></span>
+                <button id="set-date-next-month" aria-label="Next month">></button>
+            </div>
+            <div id="set-date-grid"></div>
+            <div class="action-buttons">
+                <button class="clear-selections" aria-label="Clear store date">Clear Selections</button>
+                <button class="close-calendar" aria-label="Close calendar">Close</button>
+            </div>
+        </div>
+        <div id="location-list"></div>
+    </div>
+    <div id="toast"></div>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
+    <script>
+        // DOM elements
+        const dom = {
+            map: document.getElementById('map'),
+            toggleListBtn: document.getElementById('toggle-list-btn'),
+            locationListContainer: document.getElementById('location-list-container'),
+            locationList: document.getElementById('location-list'),
+            searchFilter: document.getElementById('search-filter'),
+            selectDate: document.getElementById('select-date'),
+            clearSelections: document.getElementById('clear-selections'),
+            showComplete: document.getElementById('show-complete'),
+            showIncomplete: document.getElementById('show-incomplete'),
+            calendarOverlay: document.getElementById('calendar-overlay'),
+            calendar: document.getElementById('calendar'),
+            calendarGrid: document.getElementById('calendar-grid'),
+            monthYear: document.getElementById('month-year'),
+            prevMonth: document.getElementById('prev-month'),
+            nextMonth: document.getElementById('next-month'),
+            clearSelectionsBtn: document.querySelector('#calendar .clear-selections'),
+            closeCalendar: document.querySelector('#calendar .close-calendar'),
+            setDateOverlay: document.getElementById('set-date-overlay'),
+            setDateCalendar: document.getElementById('set-date-calendar'),
+            setDateGrid: document.getElementById('set-date-grid'),
+            setDateMonthYear: document.getElementById('set-date-month-year'),
+            setDatePrevMonth: document.getElementById('set-date-prev-month'),
+            setDateNextMonth: document.getElementById('set-date-next-month'),
+            setDateClearSelections: document.querySelector('#set-date-calendar .clear-selections'),
+            setDateCloseCalendar: document.querySelector('#set-date-calendar .close-calendar'),
+            toast: document.getElementById('toast'),
+            loadingOverlay: document.getElementById('loading-overlay')
+        };
+
+        // State variables
+        let map, storeDots = L.layerGroup([]);
+        let locations = [], storeStates = {}, searchQuery = '';
+        let filterMode = 'all', filterDate = null;
+        let currentMonth = new Date().getMonth();
+        let currentYear = new Date().getFullYear();
+        let setDateMonth = new Date().getMonth();
+        let setDateYear = new Date().getFullYear();
+        let currentSetDateIndex = null;
+
+        // Utility functions
+        function showToast(message, duration = 3000) {
+            dom.toast.textContent = message;
+            dom.toast.style.display = 'block';
+            setTimeout(() => dom.toast.style.display = 'none', duration);
+        }
+
+        function showLoading(show = true) {
+            dom.loadingOverlay.style.display = show ? 'flex' : 'none';
+        }
+
+        function saveToLocalStorage() {
+            try {
+                localStorage.setItem('storeStates', JSON.stringify(storeStates));
+            } catch (e) {
+                showToast("Failed to save data.", 4000);
+            }
+        }
+
+        // Date functions
+        function setStoreDate(index, date, dot) {
+            const state = storeStates[index] || { color: 'green', date: null };
+            state.date = date;
+            state.color = date ? 'red' : 'green';
+            storeStates[index] = state;
+            saveToLocalStorage();
+            updateView();
+            updatePopupContent(index, dot);
+            dot.openPopup();
+        }
+
+        function updatePopupContent(index, dot) {
+            const state = storeStates[index] || { color: 'green', date: null };
+            const addressKey = locations.find(loc => loc.index === index)?.addressKey || 'Unknown';
+            const popupContent = `
+                <div style="position: relative;">
+                    <a href="#" class="leaflet-popup-close-button">×</a>
+                    <b>${addressKey}</b><br>
+                    Date: ${state.date || 'None'}<br>
+                    <button class="set-date-btn" data-index="${index}">
+                        Set Date
+                    </button>
+                </div>
+            `;
+            dot.setPopupContent(popupContent);
+        }
+
+        // Calendar functions (filter)
+        function renderCalendar() {
+            dom.calendarGrid.innerHTML = '';
+            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                               'July', 'August', 'September', 'October', 'November', 'December'];
+            dom.monthYear.textContent = `${monthNames[currentMonth]} ${currentYear}`;
+
+            const today = new Date();
+            const isCurrentMonth = currentMonth === today.getMonth() && currentYear === today.getFullYear();
+            const todayDate = today.getDate();
+
+            ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(day => {
+                const div = document.createElement('div');
+                div.className = 'header';
+                div.textContent = day;
+                dom.calendarGrid.appendChild(div);
+            });
+
+            const firstDay = new Date(currentYear, currentMonth, 1).getDay();
+            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+            const prevMonthDays = new Date(currentYear, currentMonth, 0).getDate();
+
+            for (let i = firstDay - 1; i >= 0; i--) {
+                const div = document.createElement('div');
+                div.className = 'disabled';
+                div.textContent = prevMonthDays - i;
+                dom.calendarGrid.appendChild(div);
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const div = document.createElement('div');
+                div.textContent = day;
+                if (isCurrentMonth && day === todayDate) {
+                    div.className = 'today';
+                }
+                div.onclick = () => {
+                    filterDate = new Date(currentYear, currentMonth, day).toLocaleDateString('en-CA');
+                    filterMode = 'date';
+                    dom.selectDate.textContent = `Date: ${filterDate}`;
+                    hideCalendar();
+                    updateView();
+                };
+                dom.calendarGrid.appendChild(div);
+            }
+
+            const totalCells = firstDay + daysInMonth;
+            const remainingCells = Math.ceil(totalCells / 7) * 7 - totalCells;
+            for (let i = 1; i <= remainingCells; i++) {
+                const div = document.createElement('div');
+                div.className = 'disabled';
+                div.textContent = i;
+                dom.calendarGrid.appendChild(div);
+            }
+        }
+
+        function showCalendar() {
+            dom.calendarOverlay.style.display = 'block';
+            dom.calendar.style.display = 'block';
+            renderCalendar();
+        }
+
+        function hideCalendar() {
+            dom.calendarOverlay.style.display = 'none';
+            dom.calendar.style.display = 'none';
+        }
+
+        // Calendar functions (set date)
+        function renderSetDateCalendar() {
+            dom.setDateGrid.innerHTML = '';
+            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                               'July', 'August', 'September', 'October', 'November', 'December'];
+            dom.setDateMonthYear.textContent = `${monthNames[setDateMonth]} ${setDateYear}`;
+
+            const today = new Date();
+            const isCurrentMonth = setDateMonth === today.getMonth() && setDateYear === today.getFullYear();
+            const todayDate = today.getDate();
+
+            ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].forEach(day => {
+                const div = document.createElement('div');
+                div.className = 'header';
+                div.textContent = day;
+                dom.setDateGrid.appendChild(div);
+            });
+
+            const firstDay = new Date(setDateYear, setDateMonth, 1).getDay();
+            const daysInMonth = new Date(setDateYear, setDateMonth + 1, 0).getDate();
+            const prevMonthDays = new Date(setDateYear, setDateMonth, 0).getDate();
+
+            for (let i = firstDay - 1; i >= 0; i--) {
+                const div = document.createElement('div');
+                div.className = 'disabled';
+                div.textContent = prevMonthDays - i;
+                dom.setDateGrid.appendChild(div);
+            }
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const div = document.createElement('div');
+                div.textContent = day;
+                if (isCurrentMonth && day === todayDate) {
+                    div.className = 'today';
+                }
+                div.onclick = () => {
+                    const date = new Date(setDateYear, setDateMonth, day).toLocaleDateString('en-CA');
+                    const dot = storeDots.getLayers().find(layer => layer.index === currentSetDateIndex);
+                    if (dot) {
+                        setStoreDate(currentSetDateIndex, date, dot);
+                    }
+                    hideSetDateCalendar();
+                };
+                dom.setDateGrid.appendChild(div);
+            }
+
+            const totalCells = firstDay + daysInMonth;
+            const remainingCells = Math.ceil(totalCells / 7) * 7 - totalCells;
+            for (let i = 1; i <= remainingCells; i++) {
+                const div = document.createElement('div');
+                div.className = 'disabled';
+                div.textContent = i;
+                dom.setDateGrid.appendChild(div);
+            }
+        }
+
+        function showSetDateCalendar(index) {
+            currentSetDateIndex = index;
+            dom.setDateOverlay.style.display = 'block';
+            dom.setDateCalendar.style.display = 'block';
+            renderSetDateCalendar();
+        }
+
+        function hideSetDateCalendar() {
+            dom.setDateOverlay.style.display = 'none';
+            dom.setDateCalendar.style.display = 'none';
+            currentSetDateIndex = null;
+        }
+
+        // Map and list update functions
+        function populateLocationList() {
+            dom.locationList.innerHTML = '';
+            dom.locationList.classList.remove('empty');
+
+            let filteredLocations = locations.filter(loc => 
+                !searchQuery || loc.addressKey.toLowerCase().includes(searchQuery)
+            );
+
+            if (filterMode === 'date' && filterDate) {
+                filteredLocations = filteredLocations.filter(loc => 
+                    storeStates[loc.index]?.date === filterDate);
+            } else if (filterMode === 'complete') {
+                filteredLocations = filteredLocations.filter(loc => 
+                    storeStates[loc.index]?.date);
+            } else if (filterMode === 'incomplete') {
+                filteredLocations = filteredLocations.filter(loc => 
+                    !storeStates[loc.index]?.date);
+            }
+
+            if (!filteredLocations.length) {
+                dom.locationList.classList.add('empty');
+                return;
+            }
+
+            const fragment = document.createDocumentFragment();
+            filteredLocations.forEach(({ index, addressKey }, listIndex) => {
+                const state = storeStates[index] || { color: 'green', date: null };
+                const div = document.createElement('div');
+                div.className = 'location-item';
+                div.dataset.index = index;
+                div.tabIndex = 0; // Make focusable
+                div.innerHTML = `
+                    <span class="location-number">${listIndex + 1}</span>
+                    <span class="color-dot ${state.date ? 'red' : 'green'}"></span>
+                    ${addressKey}
+                    ${state.date ? `<span class="date">${state.date}</span>` : ''}
+                `;
+                fragment.appendChild(div);
+            });
+            dom.locationList.appendChild(fragment);
+        }
+
+        function updateDots() {
+            storeDots.clearLayers();
+            locations.forEach(({ lat, lng, index, addressKey }) => {
+                if (!lat || !lng || isNaN(lat) || isNaN(lng)) return;
+
+                const state = storeStates[index] || { color: 'green', date: null };
+                if (filterMode === 'date' && filterDate && state.date !== filterDate) return;
+                if (filterMode === 'complete' && !state.date) return;
+                if (filterMode === 'incomplete' && state.date) return;
+
+                const dot = L.circleMarker([lat, lng], {
+                    radius: 6,
+                    color: '#000',
+                    fillColor: state.date ? '#FF0000' : '#00FF00',
+                    fillOpacity: 0.8,
+                    weight: 1
+                });
+                dot.index = index;
+                const popupContent = `
+                    <div style="position: relative;">
+                        <a href="#" class="leaflet-popup-close-button">×</a>
+                        <b>${addressKey}</b><br>
+                        Date: ${state.date || 'None'}<br>
+                        <button class="set-date-btn" data-index="${index}">
+                            Set Date
+                        </button>
+                    </div>
+                `;
+                const popup = L.popup();
+                dot.bindPopup(popupContent, { popup: popup });
+                dot.on('click', () => dot.openPopup());
+                dot.addTo(storeDots);
+            });
+            map.invalidateSize();
+        }
+
+        function updateButtonStates() {
+            dom.selectDate.classList.remove('active');
+            dom.showComplete.classList.remove('active');
+            dom.showIncomplete.classList.remove('active');
+
+            if (filterMode === 'date' && filterDate) {
+                dom.selectDate.classList.add('active');
+                dom.selectDate.textContent = `Date: ${filterDate}`;
+            } else {
+                dom.selectDate.textContent = 'Select Date';
+            }
+
+            if (filterMode === 'complete') {
+                dom.showComplete.classList.add('active');
+            } else if (filterMode === 'incomplete') {
+                dom.showIncomplete.classList.add('active');
+            }
+        }
+
+        function updateView() {
+            populateLocationList();
+            updateDots();
+            updateButtonStates();
+        }
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', () => {
+            showLoading(true);
+
+            try {
+                const savedStates = localStorage.getItem('storeStates');
+                if (savedStates) storeStates = JSON.parse(savedStates);
+            } catch (e) {
+                showToast("Failed to load saved data.", 4000);
+            }
+
+            map = L.map('map', { minZoom: 8, maxZoom: 18 });
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap',
+                maxZoom: 18
+            }).addTo(map);
+            storeDots.addTo(map);
+            setTimeout(() => map.invalidateSize(), 100);
+
+            dom.toggleListBtn.addEventListener('click', () => {
+                dom.locationListContainer.classList.toggle('expanded');
+                dom.toggleListBtn.textContent = dom.locationListContainer.classList.contains('expanded') 
+                    ? 'Collapse List' : 'Expand List';
+                setTimeout(() => map.invalidateSize(), 100);
+            });
+
+            window.addEventListener('resize', () => setTimeout(() => map.invalidateSize(), 100));
+
+            dom.locationList.addEventListener('click', e => {
+                const item = e.target.closest('.location-item');
+                if (item) {
+                    const index = parseInt(item.dataset.index);
+                    const dot = storeDots.getLayers().find(layer => layer.index === index);
+                    if (dot) {
+                        map.panTo(dot.getLatLng());
+                        dot.openPopup();
+                    }
+                }
+            });
+
+            dom.map.addEventListener('click', e => {
+                if (e.target.classList.contains('set-date-btn')) {
+                    const index = parseInt(e.target.dataset.index);
+                    showSetDateCalendar(index);
+                }
+            });
+
+            dom.searchFilter.addEventListener('input', () => {
+                searchQuery = dom.searchFilter.value.trim().toLowerCase();
+                updateView();
+            });
+
+            dom.selectDate.addEventListener('click', showCalendar);
+
+            dom.clearSelections.addEventListener('click', () => {
+                filterDate = null;
+                filterMode = 'all';
+                dom.selectDate.textContent = 'Select Date';
+                updateView();
+            });
+
+            dom.prevMonth.addEventListener('click', () => {
+                currentMonth--;
+                if (currentMonth < 0) {
+                    currentMonth = 11;
+                    currentYear--;
+                }
+                renderCalendar();
+            });
+
+            dom.nextMonth.addEventListener('click', () => {
+                currentMonth++;
+                if (currentMonth > 11) {
+                    currentMonth = 0;
+                    currentYear++;
+                }
+                renderCalendar();
+            });
+
+            dom.clearSelectionsBtn.addEventListener('click', () => {
+                filterDate = null;
+                filterMode = 'all';
+                dom.selectDate.textContent = 'Select Date';
+                hideCalendar();
+                updateView();
+            });
+
+            dom.closeCalendar.addEventListener('click', hideCalendar);
+
+            dom.calendarOverlay.addEventListener('click', hideCalendar);
+
+            dom.setDatePrevMonth.addEventListener('click', () => {
+                setDateMonth--;
+                if (setDateMonth < 0) {
+                    setDateMonth = 11;
+                    setDateYear--;
+                }
+                renderSetDateCalendar();
+            });
+
+            dom.setDateNextMonth.addEventListener('click', () => {
+                setDateMonth++;
+                if (setDateMonth > 11) {
+                    setDateMonth = 0;
+                    setDateYear++;
+                }
+                renderSetDateCalendar();
+            });
+
+            dom.setDateClearSelections.addEventListener('click', () => {
+                if (currentSetDateIndex !== null) {
+                    const dot = storeDots.getLayers().find(layer => layer.index === currentSetDateIndex);
+                    if (dot) {
+                        setStoreDate(currentSetDateIndex, null, dot);
+                    }
+                }
+                hideSetDateCalendar();
+            });
+
+            dom.setDateCloseCalendar.addEventListener('click', hideSetDateCalendar);
+
+            dom.setDateOverlay.addEventListener('click', hideSetDateCalendar);
+
+            dom.showComplete.addEventListener('click', () => {
+                filterMode = 'complete';
+                filterDate = null;
+                dom.selectDate.textContent = 'Select Date';
+                hideCalendar();
+                updateView();
+            });
+
+            dom.showIncomplete.addEventListener('click', () => {
+                filterMode = 'incomplete';
+                filterDate = null;
+                dom.selectDate.textContent = 'Select Date';
+                hideCalendar();
+                updateView();
+            });
+
+            const csvData = `ADDRESS1,CITY,STATE,POSTALCODE,LATITUDE,LONGITUDE\n${providedData}`;
+            Papa.parse(csvData, {
+                header: true,
+                skipEmptyLines: true,
+                transformHeader: header => header.trim().replace(/^"|"$/g, ''),
+                transform: value => value.trim().replace(/^"|"$/g, ''),
+                complete: results => {
+                    const bounds = [];
+                    locations.length = 0;
+
+                    results.data.forEach((row, index) => {
+                        const zip = row.POSTALCODE;
+                        const addressKey = `${row.ADDRESS1}, ${row.CITY}, ${row.STATE}, ${zip}`;
+                        const lat = parseFloat(row.LATITUDE);
+                        const lng = parseFloat(row.LONGITUDE);
+                        if (!zip || !row.ADDRESS1 || !row.CITY || !row.STATE) {
+                            showToast(`Skipping invalid store: ${addressKey}`, 4000);
+                            return;
+                        }
+                        locations.push({ index, zip, addressKey, lat, lng });
+                        if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+                            bounds.push([lat, lng]);
+                        } else {
+                            showToast(`Missing coordinates for ${addressKey}`, 4000);
+                        }
+                    });
+
+                    if (!locations.length) {
+                        showToast("No valid stores loaded.", 5000);
+                        showLoading(false);
+                        return;
+                    }
+
+                    // Initialize storeStates to ensure all dots are green
+                    storeStates = {};
+                    locations.forEach(({ index }) => {
+                        storeStates[index] = { date: null, color: 'green' };
+                    });
+                    saveToLocalStorage();
+
+                    locations.sort((a, b) => a.addressKey.localeCompare(b.addressKey));
+                    map.fitBounds(bounds.length ? bounds : [[36.1699, -115.1398]], {
+                        padding: [50, 50],
+                        maxZoom: 10
+                    });
+                    updateView();
+                    showLoading(false);
+                },
+                error: err => {
+                    showToast("Failed to load store data.", 5000);
+                    showLoading(false);
+                }
+            });
+        });
+
+        const providedData = `4240 E CRAIG RD,N LAS VEGAS,NV,89030,36.240948,-115.080742
+2325 LAS VEGAS BLVD N,N LAS VEGAS,NV,89030,36.202629,-115.119968
+2716 E LAKE MEAD BLVD,N LAS VEGAS,NV,89030,36.196358,-115.111626
+3575 E LAKE MEAD BLVD,N LAS VEGAS,NV,89030,36.195469,-115.098703
+1011 E CHEYENNE AVE,N LAS VEGAS,NV,89030,36.217267,-115.128367
+3901 E CRAIG RD,N LAS VEGAS,NV,89030,36.239246,-115.088097
+2404 E CRAIG RD,N LAS VEGAS,NV,89030,36.240306,-115.117246
+2100 E CHEYENNE AVE,N LAS VEGAS,NV,89030,36.218107,-115.119658
+2725 LAS VEGAS BLVD N,N LAS VEGAS,NV,89030,36.209649,-115.107928
+2001 LAS VEGAS BLVD N,NORTH LAS VEGAS,NV,89030,36.1961,-115.1291
+3540 E LAKE MEAD BLVD,NORTH LAS VEGAS,NV,89030,36.196,-115.1004
+530 E CRAIG RD,NORTH LAS VEGAS,NV,89030,36.2398,-115.1332
+3025 LAS VEGAS BLVD N,NORTH LAS VEGAS,NV,89030,36.2139,-115.1003
+3407 E LAKE MEAD BLVD,NORTH LAS VEGAS,NV,89030,36.195559,-115.10208
+3820 E CRAIG RD,NORTH LAS VEGAS,NV,89030,36.2405,-115.0964
+1000 E CHEYENNE AVE,NORTH LAS VEGAS,NV,89030,36.2179,-115.1283
+300 W LAKE MEAD BLVD,NORTH LAS VEGAS,NV,89030,36.1959,-115.143
+1970 LOSEE RD,NORTH LAS VEGAS,NV,89030,36.1953,-115.1428
+3815 E CRAIG RD,NORTH LAS VEGAS,NV,89030,36.239923,-115.094417
+3812 E CRAIG RD,N LAS VEGAS,NV,89030,36.240837,-115.095635
+2755 E CRAIG RD,N LAS VEGAS,NV,89030,36.239582,-115.1114
+1415 W CHEYENNE AVE,N LAS VEGAS,NV,89030,36.2167,-115.1606
+5180 N LAMB BLVD,N LAS VEGAS,NV,89031,36.2587,-115.1735
+5110 CAMINO AL NORTE,N LAS VEGAS,NV,89031,36.252792,-115.152996
+4799 W LONE MOUNTAIN RD,NORTH LAS VEGAS,NV,89031,36.2466,-115.2064
+5225 CAMINO AL NORTE,NORTH LAS VEGAS,NV,89031,36.2548,-115.1532
+2014 W ANN RD,NORTH LAS VEGAS,NV,89031,36.2619,-115.1713
+4850 CAMINO AL NORTE,NORTH LAS VEGAS,NV,89031,36.2475,-115.1537
+6020 N DECATUR BLVD,NORTH LAS VEGAS,NV,89031,36.2729,-115.2067
+5575 N 5TH ST,NORTH LAS VEGAS,NV,89031,36.2619,-115.1349
+4730 W CHEYENNE AVE,N LAS VEGAS,NV,89032,36.218191,-115.205694
+4728 W CRAIG RD,N LAS VEGAS,NV,89032,36.2393,-115.206595
+785 W CRAIG RD,N LAS VEGAS,NV,89032,36.239033,-115.151764
+2914 W CHEYENNE AVE,N LAS VEGAS,NV,89032,36.218082,-115.180317
+2935 W LAKE MEAD BLVD,N LAS VEGAS,NV,89032,36.196128,-115.17947
+250 W CRAIG RD,NORTH LAS VEGAS,NV,89032,36.240071,-115.143131
+3660 W CRAIG RD,NORTH LAS VEGAS,NV,89032,36.2396,-115.1888
+2865 W CHEYENNE AVE,NORTH LAS VEGAS,NV,89032,36.2174,-115.179
+4309 W CRAIG RD,NORTH LAS VEGAS,NV,89032,36.2388,-115.1993
+3965 N MARTIN L KING BLVD,NORTH LAS VEGAS,NV,89032,36.2313,-115.1622
+1570 W CHEYENNE AVE,NORTH LAS VEGAS,NV,89032,36.2179,-115.1619
+2343 W GOWAN RD,NORTH LAS VEGAS,NV,89032,36.224479,-115.17461
+529 E LONE MOUNTAIN RD,N LAS VEGAS,NV,89081,36.246465,-115.133993
+5180 LOSEE RD,N LAS VEGAS,NV,89081,36.253796,-115.116444
+5685 LOSEE RD,N LAS VEGAS,NV,89081,36.263064,-115.117602
+2800 E TROPICAL PKWY,NORTH LAS VEGAS,NV,89081,36.2688,-115.1104
+6620 N 5TH ST,N LAS VEGAS,NV,89084,36.281319,-115.134441
+2525 W DEER SPRINGS WAY,N LAS VEGAS,NV,89084,36.283348,-115.176531
+7009 ALIANTE PKWY,N LAS VEGAS,NV,89084,36.287914,-115.17893
+300 W CENTENNIAL PKWY,NORTH LAS VEGAS,NV,89084,36.2767,-115.145
+150 E CENTENNIAL PKWY,NORTH LAS VEGAS,NV,89084,36.276903,-115.138029
+7235 ALIANTE PKWY,NORTH LAS VEGAS,NV,89084,36.292691,-115.184936
+70 E CENTENNIAL PKWY,N LAS VEGAS,NV,89084,36.276501,-115.139113
+6580 N LOSEE RD,N LAS VEGAS,NV,89086,36.278792,-115.116456
+903 N PECOS RD,LAS VEGAS,NV,89101,36.181302,-115.098435
+1592 N EASTERN AVE,LAS VEGAS,NV,89101,36.188077,-115.114825
+600 LAS VEGAS BLVD N,LAS VEGAS,NV,89101,36.175219,-115.136332
+1101 E BONANZA RD,LAS VEGAS,NV,89101,36.174346,-115.130946
+228 LAS VEGAS BLVD N,LAS VEGAS,NV,89101,36.171129,-115.139036
+2431 E BONANZA RD,LAS VEGAS,NV,89101,36.17417,-115.117087
+1415 FREMONT ST,LAS VEGAS,NV,89101,36.164768,-115.129587
+2416 STEWART AVE,LAS VEGAS,NV,89101,36.166179,-115.116391
+400 N EASTERN AVE,LAS VEGAS,NV,89101,36.169633,-115.115055
+1301 N EASTERN AVE,LAS VEGAS,NV,89101,36.18578,-115.116888
+3051 E BONANZA RD,LAS VEGAS,NV,89101,36.1735,-115.1062
+790 N EASTERN AVE,LAS VEGAS,NV,89101,36.1772,-115.1159
+835 N MARTIN L KING BLVD,LAS VEGAS,NV,89106,36.180217,-115.161182
+901 N RANCHO DR,LAS VEGAS,NV,89106,36.181399,-115.179875
+1600 N RANCHO DR,LAS VEGAS,NV,89106,36.189712,-115.185914
+529 N RANCHO DR,LAS VEGAS,NV,89106,36.176925,-115.17608
+2151 N RANCHO DR,LAS VEGAS,NV,89106,36.199754,-115.196654
+1420 W BONANZA RD,LAS VEGAS,NV,89106,36.1772,-115.1594
+1451 W OWENS AVE,LAS VEGAS,NV,89106,36.1882,-115.1603
+870 N RAINBOW BLVD,LAS VEGAS,NV,89107,36.180833,-115.242122
+845 N DECATUR BLVD,LAS VEGAS,NV,89107,36.1806,-115.2063
+850 N DECATUR BLVD,LAS VEGAS,NV,89107,36.1801,-115.2058
+2027 N DECATUR BLVD,LAS VEGAS,NV,89108,36.196932,-115.206434
+6702 W CHEYENNE AVE,LAS VEGAS,NV,89108,36.218579,-115.242821
+2003 N JONES BLVD,LAS VEGAS,NV,89108,36.196984,-115.223779
+6703 W ALEXANDER RD,LAS VEGAS,NV,89108,36.2329,-115.2424
+4701 W LAKE MEAD BLVD,LAS VEGAS,NV,89108,36.19527,-115.205067
+6400 W LAKE MEAD BLVD,LAS VEGAS,NV,89108,36.1961,-115.2333
+2400 N RAINBOW BLVD,LAS VEGAS,NV,89108,36.2035,-115.242
+6050 SMOKE RANCH RD,LAS VEGAS,NV,89108,36.2032,-115.223
+6101 VEGAS DR,LAS VEGAS,NV,89108,36.1883,-115.2243
+2745 N RAINBOW BLVD,LAS VEGAS,NV,89108,36.20971,-115.242295
+5099 E BONANZA RD,LAS VEGAS,NV,89110,36.173804,-115.063107
+3520 E OWENS AVE,LAS VEGAS,NV,89110,36.18865,-115.097792
+780 N NELLIS BLVD,LAS VEGAS,NV,89110,36.173596,-115.06159
+225 N LAMB BLVD,LAS VEGAS,NV,89110,36.165932,-115.08079
+301 N NELLIS BLVD,LAS VEGAS,NV,89110,36.168765,-115.062719
+875 N LAMB BLVD,LAS VEGAS,NV,89110,36.179321,-115.079851
+251 N NELLIS BLVD,LAS VEGAS,NV,89110,36.1662,-115.0623
+4380 E BONANZA RD,LAS VEGAS,NV,89110,36.173801,-115.081313
+901 N LAMB BLVD,LAS VEGAS,NV,89110,36.1811,-115.0801
+890 N PECOS RD,LAS VEGAS,NV,89110,36.1804,-115.098
+5075 E WASHINGTON AVE,LAS VEGAS,NV,89110,36.1813,-115.063
+551 N LAMB BLVD,LAS VEGAS,NV,89110,36.1726,-115.0807
+1594 N NELLIS BLVD,LAS VEGAS,NV,89110,36.1886,-115.0619
+1590 N LAMB BLVD,LAS VEGAS,NV,89110,36.1882,-115.0797
+3533 N PECOS RD,LAS VEGAS,NV,89115,36.225668,-115.098647
+3190 N LAMB BLVD,LAS VEGAS,NV,89115,36.217206,-115.079469
+3320 LAS VEGAS BLVD N,LAS VEGAS,NV,89115,36.21814,-115.091578
+2577 N PECOS RD,LAS VEGAS,NV,89115,36.20623,-115.098067
+4395 LAS VEGAS BLVD N,LAS VEGAS,NV,89115,36.239758,-115.056697
+3589 N NELLIS BLVD,LAS VEGAS,NV,89115,36.225381,-115.062654
+1960 N NELLIS BLVD,LAS VEGAS,NV,89115,36.195726,-115.061642
+4011 N LAMB BLVD,LAS VEGAS,NV,89115,36.233,-115.0803
+2395 N LAMB BLVD,LAS VEGAS,NV,89115,36.2029,-115.0803
+4385 N NELLIS BLVD,LAS VEGAS,NV,89115,36.24,-115.0624
+3887 E LAKE MEAD BLVD,LAS VEGAS,NV,89115,36.1955,-115.09
+6595 N HOLLYWOOD BLVD,LAS VEGAS,NV,89115,36.277808,-115.0257
+3191 N NELLIS BLVD,LAS VEGAS,NV,89115,36.2178,-115.0624
+3455 N NELLIS BLVD,LAS VEGAS,NV,89115,36.222982,-115.062868
+3585 N LAMB BLVD,LAS VEGAS,NV,89115,36.2245,-115.0803
+920 N BUFFALO DR,LAS VEGAS,NV,89128,36.182322,-115.259497
+7951 VEGAS DR,LAS VEGAS,NV,89128,36.1886,-115.269
+8590 W LAKE MEAD BLVD,LAS VEGAS,NV,89128,36.199625,-115.280931
+901 N BUFFALO DR,LAS VEGAS,NV,89128,36.182017,-115.260385
+1571 N BUFFALO DR,LAS VEGAS,NV,89128,36.1883,-115.2603
+7100 W LAKE MEAD BLVD,LAS VEGAS,NV,89128,36.1962,-115.2475
+7301 W LAKE MEAD BLVD,LAS VEGAS,NV,89128,36.19553,-115.252643
+2021 N BUFFALO DR,LAS VEGAS,NV,89128,36.197381,-115.260893
+3970 N TENAYA WAY,LAS VEGAS,NV,89129,36.232706,-115.250919
+9190 W CHEYENNE AVE,LAS VEGAS,NV,89129,36.21896,-115.296438
+3250 N DURANGO DR,LAS VEGAS,NV,89129,36.220114,-115.27787
+4004 N TENAYA WAY,LAS VEGAS,NV,89129,36.2333,-115.2513
+7500 W CHEYENNE AVE,LAS VEGAS,NV,89129,36.218626,-115.25972
+7191 W CRAIG RD,LAS VEGAS,NV,89129,36.2403,-115.251
+7300 W CHEYENNE AVE,LAS VEGAS,NV,89129,36.218711,-115.25419
+4800 N JONES BLVD,LAS VEGAS,NV,89130,36.246952,-115.224896
+2810 N RANCHO DR,LAS VEGAS,NV,89130,36.210221,-115.205201
+4800 W CRAIG RD,LAS VEGAS,NV,89130,36.239217,-115.208333
+4360 N RANCHO DR,LAS VEGAS,NV,89130,36.2525,-115.2278
+5001 N RAINBOW BLVD,LAS VEGAS,NV,89130,36.252598,-115.243405
+5631 N TENAYA WAY,LAS VEGAS,NV,89130,36.2636,-115.2507
+4400 N JONES BLVD,LAS VEGAS,NV,89130,36.2392,-115.2253
+4005 N RANCHO DR,LAS VEGAS,NV,89130,36.2332,-115.2271
+4371 N RANCHO DR,LAS VEGAS,NV,89130,36.2388,-115.2322
+2901 N RANCHO DR,LAS VEGAS,NV,89130,36.2119,-115.2077
+7251 W AZURE DR,LAS VEGAS,NV,89130,36.2732,-115.2519
+4747 N RANCHO DR,LAS VEGAS,NV,89130,36.2464,-115.2392
+6000 SKY POINTE DR,LAS VEGAS,NV,89130,36.2713,-115.2603
+3550 N RANCHO DR,LAS VEGAS,NV,89130,36.2231,-115.2172
+3200 N RANCHO DR,LAS VEGAS,NV,89130,36.2173,-115.2119
+7171 W ANN RD,LAS VEGAS,NV,89130,36.262642,-115.249672
+8490 FARM RD,LAS VEGAS,NV,89131,36.300509,-115.279917
+7785 N DURANGO DR,LAS VEGAS,NV,89131,36.302565,-115.282173
+7591 N CIMARRON RD,LAS VEGAS,NV,89131,36.298165,-115.270078
+9611 TRAILWOOD DR,LAS VEGAS,NV,89134,36.1914,-115.3051
+1200 N TOWN CENTER DR,LAS VEGAS,NV,89144,36.183568,-115.30897
+6980 WESTCLIFF DR,LAS VEGAS,NV,89145,36.174446,-115.249296
+7540 WESTCLIFF DR,LAS VEGAS,NV,89145,36.1742,-115.2589
+109 S RAINBOW BLVD,LAS VEGAS,NV,89145,36.173293,-115.243713
+6446 N DURANGO DR,LAS VEGAS,NV,89149,36.277843,-115.286658
+6460 CENTENNIAL CENTER BLVD,LAS VEGAS,NV,89149,36.276,-115.2708
+6390 N DURANGO DR,LAS VEGAS,NV,89149,36.2769,-115.2876
+7155 GRAND MONTECITO PKWY,LAS VEGAS,NV,89149,36.2908,-115.2846
+6775 N DURANGO DR,LAS VEGAS,NV,89149,36.2841,-115.2881
+6890 N HUALAPAI WAY,LAS VEGAS,NV,89149,36.2853,-115.3143
+6680 E LAKE MEAD BLVD,LAS VEGAS,NV,89155,36.1958,-115.0268
+5891 E LAKE MEAD BLVD,LAS VEGAS,NV,89156,36.195921,-115.045622
+6710 E LAKE MEAD BLVD,LAS VEGAS,NV,89156,36.195946,-115.025843
+6310 E LAKE MEAD BLVD,LAS VEGAS,NV,89156,36.196337,-115.034747
+6515 E LAKE MEAD BLVD,LAS VEGAS,NV,89156,36.195183,-115.02937
+6055 E LAKE MEAD BLVD,LAS VEGAS,NV,89156,36.1959,-115.0405
+1255 E CRAIG RD,NORTH LAS VEGAS,NV,890303207,36.2395,-115.1274
+2421 LOSEE RD,NORTH LAS VEGAS,NV,890304110,36.2037,-115.1377
+1220 E LAKE MEAD BLVD,NORTH LAS VEGAS,NV,890306941,36.196,-115.1256
+1003 E LAKE MEAD BLVD,NORTH LAS VEGAS,NV,890306942,36.1956,-115.1281
+1450 W CHEYENNE AVE,NORTH LAS VEGAS,NV,890307806,36.2179,-115.1607
+1412 W CRAIG RD,NORTH LAS VEGAS,NV,890320210,36.2396,-115.1614
+2816 W CRAIG RD,NORTH LAS VEGAS,NV,890320713,36.2396,-115.1795
+335 W CRAIG RD,NORTH LAS VEGAS,NV,890321229,36.2393,-115.1444
+4020 N MARTIN L KING BLVD,NORTH LAS VEGAS,NV,890323102,36.2323,-115.1619
+4401 E BONANZA RD,LAS VEGAS,NV,891103385,36.1731,-115.0801
+8598 W LAKE MEAD BLVD,LAS VEGAS,NV,891287630,36.1997,-115.282
+5590 N RAINBOW BLVD,LAS VEGAS,NV,891301621,36.2629,-115.2426
+4805 W CRAIG RD,LAS VEGAS,NV,891302728,36.2385,-115.208
+2395 N RANCHO DR,LAS VEGAS,NV,891303313,36.2026,-115.1992
+7161 N HUALAPAI WAY,LAS VEGAS,NV,891661113,36.2914,-115.3147`;
+    </script>
+</body>
+</html>
