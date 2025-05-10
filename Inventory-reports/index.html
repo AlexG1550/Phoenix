@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory Distribution Reports</title>
+    <!-- Load dependencies first to ensure availability -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-router-dom@6.26.2/dist/umd/react-router-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.3/dist/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.3/dist/jspdf.plugin.autotable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-window@1.8.10/dist/index.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@heroicons/react@2.1.5/dist/heroicons-react.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div id="root"></div>
+    <!-- Application logic -->
+    <script type="text/javascript">
+        // Namespace globals to avoid conflicts
+        window.gkData = {
+            isXlsx: false,
+            xlsxFileLookup: {},
+            fileData: {}
+        };
+
+        function filledCell(cell) {
+            return cell !== '' && cell != null;
+        }
+
+        function loadFileData(filename) {
+            if (!window.X
+
+LSX) {
+                console.error('XLSX library not loaded.');
+                return '';
+            }
+
+            if (window.gkData.isXlsx && window.gkData.xlsxFileLookup[filename]) {
+                try {
+                    const workbook = XLSX.read(window.gkData.fileData[filename], { type: 'base64' });
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+
+                    // Convert sheet to JSON to filter blank rows
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                    // Filter out blank rows
+                    const filteredData = jsonData.filter(row => row.some(filledCell));
+
+                    // Find header row safely
+                    let headerRowIndex = 0;
+                    for (let i = 0; i < filteredData.length - 1; i++) {
+                        const currentFilled = filteredData[i].filter(filledCell).length;
+                        const nextFilled = filteredData[i + 1].filter(filledCell).length;
+                        if (currentFilled >= nextFilled) {
+                            headerRowIndex = i;
+                            break;
+                        }
+                    }
+                    // Fallback to first row if no suitable header found or too far down
+                    if (headerRowIndex > 25) {
+                        headerRowIndex = 0;
+                    }
+
+                    // Convert filtered data to CSV
+                    const newSheet = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
+                    const csv = XLSX.utils.sheet_to_csv(newSheet);
+                    return csv;
+                } catch (e) {
+                    console.error('Error processing XLSX file:', e);
+                    return '';
+                }
+            }
+            return window.gkData.fileData[filename] || '';
+        }
+    </script>
+    <!-- Load and transpile React app -->
+    <script type="text/babel" src="./src/App.jsx"></script>
+    <!-- Cloudflare scripts (remove for local development if not using Cloudflare) -->
+    <script>
+        (function() {
+            function c() {
+                var b = a.contentDocument || a.contentWindow.document;
+                if (b) {
+                    var d = b.createElement('script');
+                    d.innerHTML = "window.__CF$cv$params={r:'93dacfdb4ff8bd60',t:'MTc0Njg5NDUyOS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";
+                    b.getElementsByTagName('head')[0].appendChild(d);
+                }
+            }
+            if (document.body) {
+                var a = document.createElement('iframe');
+                a.height = 1;
+                a.width = 1;
+                a.style.position = 'absolute';
+                a.style.top = 0;
+                a.style.left = 0;
+                a.style.border = 'none';
+                a.style.visibility = 'hidden';
+                document.body.appendChild(a);
+                if ('loading' !== document.readyState) c();
+                else if (window.addEventListener) document.addEventListener('DOMContentLoaded', c);
+                else {
+                    var e = document.onreadystatechange || function() {};
+                    document.onreadystatechange = function(b) {
+                        e(b);
+                        'loading' !== document.readyState && (document.onreadystatechange = e, c());
+                    };
+                }
+            }
+        })();
+    </script>
+    <script>
+        (function() {
+            function c() {
+                var b = a.contentDocument || a.contentWindow.document;
+                if (b) {
+                    var d = b.createElement('script');
+                    d.innerHTML = "window.__CF$cv$params={r:'93dad8d26bb0b03f',t:'MTc0Njg5NDg5Ny4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";
+                    b.getElementsByTagName('head')[0].appendChild(d);
+                }
+            }
+            if (document.body) {
+                var a = document.createElement('iframe');
+                a.height = 1;
+                a.width = 1;
+                a.style.position = 'absolute';
+                a.style.top = 0;
+                a.style.left = 0;
+                a.style.border = 'none';
+                a.style.visibility = 'hidden';
+                document.body.appendChild(a);
+                if ('loading' !== document.readyState) c();
+                else if (window.addEventListener) document.addEventListener('DOMContentLoaded', c);
+                else {
+                    var e = document.onreadystatechange || function() {};
+                    document.onreadystatechange = function(b) {
+                        e(b);
+                        'loading' !== document.readyState && (document.onreadystatechange = e, c());
+                    };
+                }
+            }
+        })();
+    </script>
+</body>
+</html>
